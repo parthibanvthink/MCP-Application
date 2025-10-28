@@ -1,231 +1,128 @@
+import os
 import json
-import openai
-from mcp.server.fastmcp import FastMCP
+import httpx
+from dotenv import load_dotenv
+from openai import OpenAI
  
+load_dotenv()
  
-openai.api_key = ""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CAB_API_URL = os.getenv("CAB_API_URL", "http://localhost:8000/api/cab_details/")
+CAB_MCP_TOKEN = os.getenv("CAB_MCP_TOKEN")
  
-mcp = FastMCP("Demo")
+client = OpenAI(api_key=OPENAI_API_KEY)
  
-# agent.py
-try:
-    from mcp.server.fastmcp import FastMCP
-except ModuleNotFoundError:
-    # Mock for local dev
-    class FastMCP:
-        def __init__(self, *args, **kwargs):
-            print("FastMCP mock initialized")
+system_prompt = """
+You are a JSON-based assistant that helps manage users and cabs.
+Always return a **valid JSON** response suitable for frontend schema rendering.
  
-        def send(self, data):
-            print("Mock send:", data)
+You are a helpful assistant that generates structured JSON responses in the ChatSchema format.
  
-        def receive(self):
-            return {"message": "This is a mock response"}
+All responses must strictly be in **valid JSON** matching this structure:
  
+### ✅ Response Format
  
-@mcp.tool()
-def add(a: int, b: int) -> int:
-    """Add two numbers"""
-    return a + b
- 
- 
-# Add a dynamic greeting resource
-@mcp.resource("greeting://{name}")
-def get_greeting(name: str) -> str:
-    """Get a personalized greeting"""
-    return f"Hello, {name}!"
- 
- 
-# Add a prompt
-@mcp.prompt()
-def greet_user(name: str, style: str = "friendly") -> str:
-    """Generate a greeting prompt"""
-    styles = {
-        "friendly": "Please write a warm, friendly greeting",
-        "formal": "Please write a formal, professional greeting",
-        "casual": "Please write a casual, relaxed greeting",
+{
+  "id": "unique-id",
+  "message": "Short user-facing message or instruction",
+  "components": [
+    {
+      "id": "unique-component-id",
+      "type": "form | select | button | input | text | rating | list | map | switch | date | etc.",
+      "label": "Visible label for the UI element",
+      "required": true | false,
+      "options": [
+        { "value": "string", "label": "string" }
+      ],
+      "children": [ ...nested components... ],
+      "validation": {
+        "minLength": number,
+        "maxLength": number,
+        "pattern": "regex-string",
+        "message": "validation message"
+      },
+      "apiConfig": {
+        "endpoint": "https://api.example.com/path",
+        "method": "GET | POST | PUT | DELETE",
+        "headers": { "Authorization": "Bearer token" }
+      }
     }
- 
-    return f"{styles.get(style, styles['friendly'])} for someone named {name}."
- 
- 
-# ===== DB Session =====
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
- 
-# ===== SYSTEM INSTRUCTION =====
-system_instruction = """
-You are a user management assistant. Always respond in JSON format suitable for UI rendering. Never respond in plain text.
+  ]
+}
  
 Available tools:
  
-1. create_user_form
-   - Returns a JSON form schema to create a new user.
-   - No inputs required.
-   - Output: JSON form with fields: full_name, email, phone.
+1️⃣ get_all_cabs
+    - Returns all cabs. (call cab roster backend)
+    - Params: none
  
-2. create_user
-   - Creates a user in the database.
-   - Inputs: full_name (string), email (string), phone (string)
-   - Output: JSON with status and created user details.
- 
-3. list_users
-   - Lists all users.
-   - No inputs required.
-   - Output: JSON with status and array of users.
- 
-4. update_user
-   - Updates a user.
-   - Inputs: user_id (int), full_name (optional), email (optional), phone (optional)
-   - Output: JSON with status and updated user details.
- 
-5. delete_user
-   - Deletes a user.
-   - Inputs: user_id (int)
-   - Output: JSON with status and message.
+2️⃣ add_cab
+    - Generates a JSON form to add a cab
+      Example:
+      {
+        "id": "add-cab",
+        "message": "Please provide cab details",
+        "components": [
+          {"id": "cab_model_name", "type": "input", "label": "Cab Model Name", "required": true},
+          {"id": "cab_reg_name", "type": "input", "label": "Cab Registration Number", "required": true}
+        ],
+        "tool": "add_cab"
+      }
  
 Rules:
+- If the query clearly requires fetching cab details → respond with {"tool": "get_all_cabs"}
+- Never send plain text. Always wrap everything in valid JSON.
 - Decide which tool to call based on the user's message.
-- If a form is needed, generate the JSON form in this structure:
- 
-{
-    "id": "<interaction-id>",
-    "message": "<message to user>",
-    "components": [
-        {
-            "id": "<form-id>",
-            "type": "form",
-            "children": [
-                {
-                    "id": "<field-id>",
-                    "type": "input",
-                    "inputType": "<text/email/tel/date>",
-                    "label": "<Field Label>",
-                    "placeholder": "<placeholder text>",
-                    "required": true/false,
-                    "validation": {
-                        "minLength": <number>,
-                        "pattern": "<regex>",
-                        "message": "<validation message>"
-                    }
-                },
-                ...
-            ],
-            "apiConfig": {
-                "endpoint": "<API endpoint>",
-                "method": "POST",
-                "headers": {"Authorization": "Bearer <token>"}
-            }
-        }
-    ]
-}
+- If a form is needed, generate the JSON form in this structure
+- Always output a **complete JSON object** — no text outside the JSON.
+- `message` should describe the purpose of the interaction.
+- Use realistic labels, placeholders, and options.
+- Include `apiConfig` when the UI requires data submission or retrieval.
+- Do not include explanations or comments.
+- Follow the examples provided below for structure consistency.
 - Always return JSON in the above schema style, similar to the 'appointment' example.
 - Do not provide explanations or reasoning. Only return valid JSON output.
-- If input is JSON like {"action-choice": "create_user", "full_name": "John Doe", "email": "john@example.com", "phone": "1234567890"}, call the appropriate tool with these params.
-- If input is plain text like "I want to create a user", generate the JSON form for user creation.
+- every response must be wrapped in a JSON object with a "message" key.
+ 
 """
  
+async def get_cabs_from_backend():
+    headers = {"Authorization": f"Bearer {CAB_MCP_TOKEN}"}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(CAB_API_URL, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
  
-# ===== INITIALIZE AGENT =====
-# user_agent = create_agent(name="user_crud_agent", system_prompt=system_instruction)
+async def handle_chat(user_input: str):
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input}
+        ],
+        temperature=0
+    )
  
- 
-# # ===== TOOLS =====
-# @user_agent.tool
-# def create_user_form():
-#     """Return JSON form for user creation"""
-#     form_schema = {
-#         "id": "user-create-form",
-#         "message": "Please fill out user details:",
-#         "components": [
-#             {
-#                 "id": "user-form",
-#                 "type": "form",
-#                 "children": [
-#                     {"id": "full-name", "type": "input", "label": "Full Name", "required": True},
-#                     {"id": "email", "type": "input", "label": "Email Address", "required": True},
-#                     {"id": "phone", "type": "input", "label": "Phone Number", "required": True},
-#                 ],
-#                 "apiConfig": {
-#                     "endpoint": "/submit_create_user",
-#                     "method": "POST",
-#                     "headers": {"Content-Type": "application/json"}
-#                 }
-#             }
-#         ]
-#     }
-#     return json.dumps(form_schema, indent=2)
- 
-# @user_agent.tool
-# def create_user(full_name: str, email: str, phone: str):
-#     db = next(get_db())
-#     user = User(full_name=full_name, email=email, phone=phone)
-#     db.add(user)
-#     db.commit()
-#     db.refresh(user)
-#     return json.dumps({"status": "success", "user": user.as_dict()})
- 
-# @user_agent.tool
-# def list_users():
-#     db = next(get_db())
-#     users = db.query(User).all()
-#     return json.dumps({"status": "success", "users": [u.as_dict() for u in users]})
- 
-# @user_agent.tool
-# def update_user(user_id: int, full_name: str = None, email: str = None, phone: str = None):
-#     db = next(get_db())
-#     user = db.query(User).filter(User.id == user_id).first()
-#     if not user:
-#         return json.dumps({"status": "error", "message": "User not found"})
-#     if full_name: user.full_name = full_name
-#     if email: user.email = email
-#     if phone: user.phone = phone
-#     db.commit()
-#     return json.dumps({"status": "success", "message": "User updated", "user": user.as_dict()})
- 
-# @user_agent.tool
-# def delete_user(user_id: int):
-#     db = next(get_db())
-#     user = db.query(User).filter(User.id == user_id).first()
-#     if not user:
-#         return json.dumps({"status": "error", "message": "User not found"})
-#     db.delete(user)
-#     db.commit()
-#     return json.dumps({"status": "success", "message": f"User deleted {user_id}"})
- 
-# ===== HANDLER =====
-import json
-import openai
- 
-def handle_chat(message):
-    # Ensure the input to OpenAI is always a string
-    if isinstance(message, dict):
-        user_input = json.dumps(message)  # convert dict to JSON string
-    else:
-        user_input = str(message)
+    content = response.choices[0].message.content.strip()
  
     try:
-        # Call OpenAI ChatCompletion
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": user_input}
-            ],
-            temperature=0
-        )
- 
-        # Get the assistant message
-        content = response.choices[0].message.content
- 
-        # Convert response string to Python dict
-        form_json = json.loads(content)
+        parsed = json.loads(content)
     except json.JSONDecodeError:
-        # If assistant response is not valid JSON, return as a simple message
-        form_json = {"message": content}
+        return {"message": "Sorry, invalid response format from model."}
  
-    return form_json
+    # Step 2: If it requested a tool call — execute it
+    if parsed.get("tool") == "get_all_cabs":
+        cabs = await get_cabs_from_backend()
+        return {
+            "message": "Here are all available cabs:",
+            "components": [
+                {
+                    "id": "list",
+                    "type": "list",
+                    "label": "Available Cabs",
+                    "list": cabs
+                }
+            ],
+        }
+ 
+    return parsed

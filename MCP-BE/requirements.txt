@@ -1,0 +1,28 @@
+# --- Core dependencies ---
+fastapi==0.115.0
+uvicorn==0.30.6
+
+# --- Database ---
+SQLAlchemy==2.0.34
+psycopg2-binary==2.9.9        # if you're using PostgreSQL
+# or use below if SQLite only
+# sqlite3 is built-in with Python, no need to install
+
+# --- AI / OpenAI ---
+openai==1.45.0
+
+# --- MCP Protocol ---
+mcp==0.1.4
+mcp-server-fastmcp==0.1.4     # (for FastMCP usage)
+
+# --- Utilities ---
+pydantic==2.9.2
+python-dotenv==1.0.1
+requests==2.32.3
+
+# --- CORS Middleware ---
+starlette==0.38.2              # FastAPI depends on this
+
+# --- Development ---
+black==24.8.0
+flake8==7.1.1
